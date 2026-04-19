@@ -126,62 +126,76 @@ async def telegram_webhook(request: Request):
     if not text or not chat_id:
         return {"ok": True}
 
-    # Route based on command or keyword
-    if text.startswith("/legal") or "contract" in text.lower() or "sign" in text.lower():
-        clean_message = text.replace("/legal", "").strip()
-        response = await run_agent(
-            legal_runner,
-            legal_session_service,
-            user_id,
-            chat_id,
-            clean_message or "Hello, I need legal help."
-        )
-        agent_name = "⚖️ Legal Aid Agent"
-    elif text.startswith("/sdr") or "leads" in text.lower() or "sales" in text.lower():
-        clean_message = text.replace("/sdr", "").strip()
-        response = await run_agent(
-            sdr_runner,
-            sdr_session_service,
-            user_id,
-            chat_id,
-            clean_message or "Hello, I need sales help."
-        )
-        agent_name = "💼 SDR Agent"
-    elif text == "/start":
-        response = (
-            "👋 Welcome to the AI Agent Platform!\n\n"
-            "I have two agents ready to help you:\n\n"
-            "⚖️ *Legal Aid Agent* — Analyse contracts and legal documents\n"
-            "Use /legal followed by your question\n\n"
-            "💼 *SDR Agent* — Research leads and write sales emails\n"
-            "Use /sdr followed by your product and leads info\n\n"
-            "What do you need help with today?"
-        )
-        agent_name = "Platform"
-    else:
-        response = (
-            "Please use:\n"
-            "/legal — for contract analysis\n"
-            "/sdr — for sales outreach help"
-        )
-        agent_name = "Platform"
-
-    # Send reply to Telegram
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if telegram_token:
-        import httpx
+
+    async def send_message(msg: str):
         async with httpx.AsyncClient() as client:
             await client.post(
                 f"https://api.telegram.org/bot{telegram_token}/sendMessage",
                 json={
                     "chat_id": chat_id,
-                    "text": f"{agent_name}\n\n{response}",
+                    "text": msg,
                     "parse_mode": "Markdown"
                 }
             )
 
-    return {"ok": True}
+    async def process_and_reply():
+        try:
+            if text == "/start":
+                await send_message(
+                    "👋 Welcome to the AI Agent Platform!\n\n"
+                    "I have two agents ready to help you:\n\n"
+                    "⚖️ *Legal Aid Agent* — Analyse contracts and legal documents\n"
+                    "Use /legal followed by your question\n\n"
+                    "💼 *SDR Agent* — Research leads and write sales emails\n"
+                    "Use /sdr followed by your product and leads info\n\n"
+                    "What do you need help with today?"
+                )
+                return
 
+            if text.startswith("/legal") or "contract" in text.lower() or "sign" in text.lower():
+                clean_message = text.replace("/legal", "").strip()
+                if not clean_message:
+                    await send_message("Please add your question after /legal\n\nExample:\n/legal My contract says I waive overtime pay. Should I sign?")
+                    return
+                await send_message("*Legal Aid Agent is analysing your contract...*\n\nThis takes about 60 seconds. Please wait.")
+                response = await run_agent(
+                    legal_runner,
+                    legal_session_service,
+                    user_id,
+                    chat_id,
+                    clean_message
+                )
+                await send_message(f"*Legal Aid Agent*\n\n{response}")
+
+            elif text.startswith("/sdr") or "leads" in text.lower() or "sales" in text.lower():
+                clean_message = text.replace("/sdr", "").strip()
+                if not clean_message:
+                    await send_message("Please add your product and lead info after /sdr\n\nExample:\n/sdr Product: AI CRM tool. Lead: John Smith, Sales Director at Acme Corp")
+                    return
+                await send_message("*SDR Agent is researching your leads...*\n\nThis takes about 60 seconds. Please wait.")
+                response = await run_agent(
+                    sdr_runner,
+                    sdr_session_service,
+                    user_id,
+                    chat_id,
+                    clean_message
+                )
+                await send_message(f"*SDR Agent*\n\n{response}")
+
+            else:
+                await send_message(
+                    "Please use:\n"
+                    "/legal — for contract analysis\n"
+                    "/sdr — for sales outreach help"
+                )
+
+        except Exception as e:
+            await send_message(f"⚠️ Something went wrong. Please try again.\n\nError: {str(e)}")
+
+    # Return immediately to Telegram, process in background
+    asyncio.create_task(process_and_reply())
+    return {"ok": True}
 
 if __name__ == "__main__":
     uvicorn.run("server:app", host="0.0.0.0", port=8080, reload=False)
